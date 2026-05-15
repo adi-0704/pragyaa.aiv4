@@ -377,91 +377,125 @@ async function readExcel(file) {
 
 // ─── Root Cause Analyzer ──────────────────────
 function analyzeRootCauses(data) {
-  const norm = v => {
-    v = String(v || '').trim().toLowerCase();
-    if (v.includes('rework') || v === 'no' || v.includes('incorrect')) return 'rework';
-    if (v.includes('approve') || v === 'yes' || v.includes('correct')) return 'approved';
-    return v;
-  };
+  const norm = v => String(v || '').trim().toLowerCase();
   const total = data.length;
-  
   const cols = Object.keys(data[0]);
-  let aiCol = cols.find(c => c.toLowerCase().includes('ai') && (c.toLowerCase().includes('status') || c.toLowerCase().includes('disposition')));
-  let verCol = cols.find(c => (c.toLowerCase().includes('verifier') || c.toLowerCase().includes('finmech')) && (c.toLowerCase().includes('status') || c.toLowerCase().includes('disposition')));
-  
-  if (!aiCol) aiCol = cols.find(c => c.toLowerCase() === 'disposition') || cols[0];
-  if (!verCol) verCol = cols.find(c => c.toLowerCase() === 'finmech disposition') || cols[1];
-  
-  let agree = 0, falseRework = [], falseApprove = [];
-  data.forEach(row => {
-    const ai = norm(row[aiCol]);
-    const ver = norm(row[verCol]);
-    if (ai === ver) agree++;
-    else if (ai === 'rework' && ver === 'approved') falseRework.push(row);
-    else if (ai === 'approved' && ver === 'rework') falseApprove.push(row);
-  });
-  
-  const params = cols.filter(c => c.includes(' Score') || c.includes(' Met') || c === 'Accurate Disposition' || c === 'Junk Lead' || c === 'Complete Information Provided' || c === 'Professional Behavior');
-  
+
+  // ── Detect Process ────────────────────────────
+  const hasCallStatus = cols.some(c => c.includes('Call Status AI'));
+  const hasAccurateDisposition = cols.some(c => c === 'Accurate Disposition');
+  const hasMismatchRemarks = cols.some(c => c === 'Mismatch Remarks');
+  const processType = hasCallStatus ? 'cc_dc' : (hasAccurateDisposition ? 'insta' : 'generic');
+
+  let agree = 0, mismatch = [], allRows = data;
+
+  if (processType === 'cc_dc') {
+    // CC/DC: compare Call Status AI vs Call Status Verifier
+    const aiCol = cols.find(c => c.includes('Call Status AI'));
+    const verCol = cols.find(c => c.includes('Call Status Verifier'));
+    data.forEach(row => {
+      const ai = norm(row[aiCol] || '');
+      const ver = norm(row[verCol] || '');
+      if (ai === ver) agree++;
+      else mismatch.push(row);
+    });
+  } else if (processType === 'insta') {
+    // Insta: use Accurate Disposition Yes/No as the mismatch flag
+    const accCol = 'Accurate Disposition';
+    data.forEach(row => {
+      const v = norm(row[accCol] || '');
+      if (v === 'yes') agree++;
+      else if (v === 'no') mismatch.push(row);
+      else agree++; // treat blanks as correct to avoid inflation
+    });
+  } else {
+    // Generic fallback: compare Disposition vs Finmech Disposition
+    const aiCol = cols.find(c => c.toLowerCase() === 'disposition') || cols[0];
+    const verCol = cols.find(c => c.toLowerCase() === 'finmech disposition') || cols[1];
+    data.forEach(row => {
+      const ai = norm(row[aiCol] || '');
+      const ver = norm(row[verCol] || '');
+      if (ai === ver) agree++;
+      else mismatch.push(row);
+    });
+  }
+
+  // ── Parameter Failure Analysis ─────────────────
+  // Find all score columns
+  const scoreCols = cols.filter(c => c.includes(' Score') || c.includes(' Met'));
+  const binaryCols = cols.filter(c => ['Accurate Disposition','Junk Lead','Complete Information Provided','Professional Behavior','No Disconnection Avoid'].includes(c));
   const paramFailures = {};
-  params.forEach(col => {
-    const fails = falseRework.filter(r => {
-      const v = String(r[col] || '').trim().toLowerCase();
-      return v === 'no' || v === '0' || v === 'incorrect';
+
+  scoreCols.forEach(col => {
+    // Get max possible score for this column across all data
+    const allVals = allRows.map(r => parseFloat(r[col]) || 0);
+    const maxScore = Math.max(...allVals);
+    if (maxScore === 0) return; // skip always-zero columns
+    
+    const fails = mismatch.filter(r => {
+      const v = r[col];
+      const num = parseFloat(v);
+      if (!isNaN(num)) return num === 0;
+      return norm(v) === 'no' || norm(v) === '0';
     }).length;
     if (fails > 0) {
-      paramFailures[col] = { count: fails, pct: Math.round(fails / (falseRework.length || 1) * 1000) / 10 };
+      paramFailures[col] = { count: fails, pct: Math.round(fails / (mismatch.length || 1) * 1000) / 10 };
     }
   });
-  
-  const consentReasonCol = cols.find(k => k.toLowerCase().includes('consent') && (k.toLowerCase().includes('reason') || k.toLowerCase().includes('remarks'))) || '';
-  const consentFails = falseRework.filter(r => {
-    const v = String(r['Consent Taken Met'] || r['OTP Verification Consent Score'] || '').trim().toLowerCase();
-    return v === 'no' || v === '0';
+
+  binaryCols.forEach(col => {
+    const fails = mismatch.filter(r => norm(r[col] || '') === 'no' || norm(r[col] || '') === 'incorrect').length;
+    if (fails > 0) {
+      paramFailures[col] = { count: fails, pct: Math.round(fails / (mismatch.length || 1) * 1000) / 10 };
+    }
   });
-  const consentPatterns = {
-    'Passive Okay/Haan': 0, 'No Explicit Ask': 0,
-    'Ji/Hmm Backchannel': 0, 'Premature/Rushed': 0
-  };
-  consentFails.forEach(r => {
-    const reason = norm(r[consentReasonCol] || '');
-    if (['passive', 'okay', "'ok'", 'haan', 'acknowledgm'].some(k => reason.includes(k))) consentPatterns['Passive Okay/Haan']++;
-    if (['not explicitly', 'did not', 'without'].some(k => reason.includes(k))) consentPatterns['No Explicit Ask']++;
-    if (["'ji'", 'hmm', 'backchannel'].some(k => reason.includes(k))) consentPatterns['Ji/Hmm Backchannel']++;
-    if (['rushed', 'before'].some(k => reason.includes(k))) consentPatterns['Premature/Rushed']++;
+
+  // ── Mismatch Remarks Pattern Analysis ──────────
+  const remarksCols = cols.filter(c => c.toLowerCase().includes('mismatch') || c.toLowerCase().includes('remark'));
+  const remarkPatterns = {};
+  mismatch.forEach(row => {
+    remarksCols.forEach(rc => {
+      const remark = norm(row[rc] || '');
+      if (!remark) return;
+      // Split on comma and count each segment
+      remark.split(',').forEach(segment => {
+        const s = segment.trim();
+        if (s.length > 2) {
+          remarkPatterns[s] = (remarkPatterns[s] || 0) + 1;
+        }
+      });
+    });
   });
-  
-  const chargesReasonCol = cols.find(k => k.toLowerCase().includes('charges') && (k.toLowerCase().includes('reason') || k.toLowerCase().includes('remarks'))) || '';
-  const chargesFails = falseRework.filter(r => {
-    const v = String(r['Charges Explained Met'] || '').trim().toLowerCase();
-    return v === 'no' || v === '0';
-  });
-  const chargesPatterns = {
-    'Rushed Delivery': 0, 'Confusing/Unclear': 0,
-    'Missing GST': 0, 'Wrong Amounts': 0
-  };
-  chargesFails.forEach(r => {
-    const reason = norm(r[chargesReasonCol] || '');
-    if (['rushed', 'fast', 'quickly'].some(k => reason.includes(k))) chargesPatterns['Rushed Delivery']++;
-    if (['confus', 'unclear', 'not clear'].some(k => reason.includes(k))) chargesPatterns['Confusing/Unclear']++;
-    if (reason.includes('gst')) chargesPatterns['Missing GST']++;
-    if (['incorrect', 'wrong'].some(k => reason.includes(k))) chargesPatterns['Wrong Amounts']++;
-  });
-  
-  const reworkReasonCol = cols.find(k => k.toLowerCase().includes('reason for rework')) || '';
-  const faReasons = falseApprove.map(r => r[reworkReasonCol]).filter(Boolean);
-  
+
+  // Sort and keep top patterns
+  const sortedRemarks = Object.entries(remarkPatterns)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {});
+
+  // ── Score computation ──────────────────────────
+  const agreementRate = Math.round(agree / (total || 1) * 1000) / 10;
+  const mismatchRate = Math.round(mismatch.length / (total || 1) * 1000) / 10;
+
   return {
     summary: {
-      total, agree, agreementRate: Math.round(agree / total * 1000) / 10,
-      aiApprovalRate: Math.round(data.filter(r => norm(r[aiCol]) === 'approved').length / total * 1000) / 10,
-      verApprovalRate: Math.round(data.filter(r => norm(r[verCol]) === 'approved').length / total * 1000) / 10,
-      falseReworkCount: falseRework.length,
-      falseApproveCount: falseApprove.length,
+      total,
+      agree,
+      agreementRate,
+      mismatchRate,
+      aiApprovalRate: agreementRate,
+      verApprovalRate: 100 - mismatchRate,
+      falseReworkCount: mismatch.length,
+      falseApproveCount: 0,
+      processType,
     },
-    paramFailures, consentPatterns, chargesPatterns, faReasons,
+    paramFailures,
+    consentPatterns: sortedRemarks,
+    chargesPatterns: {},
+    faReasons: [],
   };
 }
+
 
 function generateDeltas(analysis) {
   const deltas = [];
@@ -541,21 +575,38 @@ function buildTemplatePrompt(analysis, deltas, currentPrompt) {
 function renderResults() {
   const s = state.analysis.summary;
   const gap = Math.round((s.verApprovalRate - s.aiApprovalRate) * 10) / 10;
+  const processLabel = s.processType === 'cc_dc' ? 'CC/DC Upgrade' : s.processType === 'insta' ? 'Insta (NCA)' : 'Generic';
+  
+  // Update process detected label if it exists
+  const processDetectedEl = document.querySelector('.results-card p');
+  if (processDetectedEl) processDetectedEl.innerHTML = `Process Detected: <strong style="color: var(--accent-color)">${processLabel}</strong>`;
+
   $('statsGrid').innerHTML = [
     { value: s.total, label: 'Total Cases', cls: '' },
-    { value: s.agreementRate + '%', label: 'Agreement', cls: s.agreementRate > 70 ? 'success' : 'danger' },
-    { value: s.aiApprovalRate + '%', label: 'AI Approval', cls: '' },
-    { value: s.verApprovalRate + '%', label: 'Verifier Approval', cls: 'success' },
-    { value: s.falseReworkCount, label: 'False Reworks', cls: 'danger' },
-    { value: (isNaN(gap) ? 0 : gap) + '%', label: 'Approval Gap', cls: 'danger' },
+    { value: s.agreementRate + '%', label: 'AI Accuracy', cls: s.agreementRate > 70 ? 'success' : 'danger' },
+    { value: s.falseReworkCount, label: 'Mismatches', cls: s.falseReworkCount > 0 ? 'danger' : 'success' },
+    { value: (isNaN(gap) ? (100 - s.agreementRate) : Math.abs(gap)) + '%', label: 'Error Rate', cls: 'danger' },
   ].map(s => `<div class="stat-card"><div class="stat-value ${s.cls}">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('');
+
   const sorted = Object.entries(state.analysis.paramFailures).sort((a, b) => b[1].pct - a[1].pct);
-  $('failureBars').innerHTML = sorted.map(([param, info]) => {
-    const cls = info.pct > 50 ? 'critical' : info.pct > 20 ? 'high' : 'medium';
-    return `<div class="failure-row"><div class="failure-label">${param.replace(' Met', '').replace(' Score', '')}</div><div class="failure-bar-bg"><div class="failure-bar ${cls}" style="width: ${info.pct}%"></div></div><div class="failure-pct">${info.pct}%</div></div>`;
-  }).join('');
-  $('patternsGrid').innerHTML = `<div class="pattern-box"><h4>🔒 Consent Patterns</h4>${Object.entries(state.analysis.consentPatterns || {}).map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span>${v}</span></div>`).join('')}</div><div class="pattern-box"><h4>💰 Charges Patterns</h4>${Object.entries(state.analysis.chargesPatterns || {}).map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span>${v}</span></div>`).join('')}</div>`;
+  if (sorted.length === 0) {
+    $('failureBars').innerHTML = '<p style="opacity:0.5; text-align:center; padding: 20px;">No parameter failures detected in mismatched rows.</p>';
+  } else {
+    $('failureBars').innerHTML = sorted.map(([param, info]) => {
+      const cls = info.pct > 50 ? 'critical' : info.pct > 20 ? 'high' : 'medium';
+      return `<div class="failure-row"><div class="failure-label">${param.replace(' Met', '').replace(' Score', '')}</div><div class="failure-bar-bg"><div class="failure-bar ${cls}" style="width: ${info.pct}%"></div></div><div class="failure-pct">${info.pct}%</div></div>`;
+    }).join('');
+  }
+
+  const remarksEntries = Object.entries(state.analysis.consentPatterns || {});
+  const patternTitle = s.processType === 'insta' ? '📋 Top Mismatch Patterns (from Remarks)' : '🔒 Consent Patterns';
+  $('patternsGrid').innerHTML = `<div class="pattern-box" style="grid-column: 1/-1"><h4>${patternTitle}</h4>${
+    remarksEntries.length > 0
+      ? remarksEntries.map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span class="badge-count">${v}</span></div>`).join('')
+      : '<p style="opacity:0.5">No patterns found in mismatch remarks.</p>'
+  }</div>`;
 }
+
 
 function renderPrompt() {
   const version = `v1.${state.history.length}`;
