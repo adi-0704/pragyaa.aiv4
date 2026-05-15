@@ -377,11 +377,20 @@ async function readExcel(file) {
 
 // ─── Root Cause Analyzer ──────────────────────
 function analyzeRootCauses(data) {
-  const norm = v => String(v || '').trim().toLowerCase();
+  const norm = v => {
+    v = String(v || '').trim().toLowerCase();
+    if (v.includes('rework') || v === 'no' || v.includes('incorrect')) return 'rework';
+    if (v.includes('approve') || v === 'yes' || v.includes('correct')) return 'approved';
+    return v;
+  };
   const total = data.length;
   
-  const aiCol = Object.keys(data[0]).find(k => k.includes('Call Status AI')) || 'Call Status AI';
-  const verCol = Object.keys(data[0]).find(k => k.includes('Call Status Verifier')) || 'Call Status Verifier';
+  const cols = Object.keys(data[0]);
+  let aiCol = cols.find(c => c.toLowerCase().includes('ai') && (c.toLowerCase().includes('status') || c.toLowerCase().includes('disposition')));
+  let verCol = cols.find(c => (c.toLowerCase().includes('verifier') || c.toLowerCase().includes('finmech')) && (c.toLowerCase().includes('status') || c.toLowerCase().includes('disposition')));
+  
+  if (!aiCol) aiCol = cols.find(c => c.toLowerCase() === 'disposition') || cols[0];
+  if (!verCol) verCol = cols.find(c => c.toLowerCase() === 'finmech disposition') || cols[1];
   
   let agree = 0, falseRework = [], falseApprove = [];
   data.forEach(row => {
@@ -389,25 +398,27 @@ function analyzeRootCauses(data) {
     const ver = norm(row[verCol]);
     if (ai === ver) agree++;
     else if (ai === 'rework' && ver === 'approved') falseRework.push(row);
-    else if (ai === 'approved' && (ver === 'rework')) falseApprove.push(row);
+    else if (ai === 'approved' && ver === 'rework') falseApprove.push(row);
   });
   
-  const params = [
-    'Greeting Met', 'Benefits Explained Met', 'Charges Explained Met',
-    'Pitch Modulation', 'Pitch Pace', 'Tone Appropriate Met',
-    'Consent Taken Met', 'Card Variant Met'
-  ];
+  const params = cols.filter(c => c.includes(' Score') || c.includes(' Met') || c === 'Accurate Disposition' || c === 'Junk Lead' || c === 'Complete Information Provided' || c === 'Professional Behavior');
   
   const paramFailures = {};
-  params.forEach(p => {
-    const col = Object.keys(data[0]).find(k => k.includes(p));
-    if (!col) return;
-    const fails = falseRework.filter(r => norm(r[col]) === 'no').length;
-    paramFailures[p] = { count: fails, pct: Math.round(fails / (falseRework.length || 1) * 1000) / 10 };
+  params.forEach(col => {
+    const fails = falseRework.filter(r => {
+      const v = String(r[col] || '').trim().toLowerCase();
+      return v === 'no' || v === '0' || v === 'incorrect';
+    }).length;
+    if (fails > 0) {
+      paramFailures[col] = { count: fails, pct: Math.round(fails / (falseRework.length || 1) * 1000) / 10 };
+    }
   });
   
-  const consentReasonCol = Object.keys(data[0]).find(k => k.includes('Consent Taken Reasons')) || '';
-  const consentFails = falseRework.filter(r => norm(r['Consent Taken Met']) === 'no');
+  const consentReasonCol = cols.find(k => k.toLowerCase().includes('consent') && (k.toLowerCase().includes('reason') || k.toLowerCase().includes('remarks'))) || '';
+  const consentFails = falseRework.filter(r => {
+    const v = String(r['Consent Taken Met'] || r['OTP Verification Consent Score'] || '').trim().toLowerCase();
+    return v === 'no' || v === '0';
+  });
   const consentPatterns = {
     'Passive Okay/Haan': 0, 'No Explicit Ask': 0,
     'Ji/Hmm Backchannel': 0, 'Premature/Rushed': 0
@@ -420,8 +431,11 @@ function analyzeRootCauses(data) {
     if (['rushed', 'before'].some(k => reason.includes(k))) consentPatterns['Premature/Rushed']++;
   });
   
-  const chargesReasonCol = Object.keys(data[0]).find(k => k.includes('Charges Explained Reasons')) || '';
-  const chargesFails = falseRework.filter(r => norm(r['Charges Explained Met']) === 'no');
+  const chargesReasonCol = cols.find(k => k.toLowerCase().includes('charges') && (k.toLowerCase().includes('reason') || k.toLowerCase().includes('remarks'))) || '';
+  const chargesFails = falseRework.filter(r => {
+    const v = String(r['Charges Explained Met'] || '').trim().toLowerCase();
+    return v === 'no' || v === '0';
+  });
   const chargesPatterns = {
     'Rushed Delivery': 0, 'Confusing/Unclear': 0,
     'Missing GST': 0, 'Wrong Amounts': 0
@@ -434,7 +448,7 @@ function analyzeRootCauses(data) {
     if (['incorrect', 'wrong'].some(k => reason.includes(k))) chargesPatterns['Wrong Amounts']++;
   });
   
-  const reworkReasonCol = Object.keys(data[0]).find(k => k.includes('Reason for Rework'));
+  const reworkReasonCol = cols.find(k => k.toLowerCase().includes('reason for rework')) || '';
   const faReasons = falseApprove.map(r => r[reworkReasonCol]).filter(Boolean);
   
   return {
@@ -533,14 +547,14 @@ function renderResults() {
     { value: s.aiApprovalRate + '%', label: 'AI Approval', cls: '' },
     { value: s.verApprovalRate + '%', label: 'Verifier Approval', cls: 'success' },
     { value: s.falseReworkCount, label: 'False Reworks', cls: 'danger' },
-    { value: gap + '%', label: 'Approval Gap', cls: 'danger' },
+    { value: (isNaN(gap) ? 0 : gap) + '%', label: 'Approval Gap', cls: 'danger' },
   ].map(s => `<div class="stat-card"><div class="stat-value ${s.cls}">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('');
   const sorted = Object.entries(state.analysis.paramFailures).sort((a, b) => b[1].pct - a[1].pct);
   $('failureBars').innerHTML = sorted.map(([param, info]) => {
     const cls = info.pct > 50 ? 'critical' : info.pct > 20 ? 'high' : 'medium';
-    return `<div class="failure-row"><div class="failure-label">${param.replace(' Met', '')}</div><div class="failure-bar-bg"><div class="failure-bar ${cls}" style="width: ${info.pct}%"></div></div><div class="failure-pct">${info.pct}%</div></div>`;
+    return `<div class="failure-row"><div class="failure-label">${param.replace(' Met', '').replace(' Score', '')}</div><div class="failure-bar-bg"><div class="failure-bar ${cls}" style="width: ${info.pct}%"></div></div><div class="failure-pct">${info.pct}%</div></div>`;
   }).join('');
-  $('patternsGrid').innerHTML = `<div class="pattern-box"><h4>🔒 Consent Patterns</h4>${Object.entries(state.analysis.consentPatterns).map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span>${v}</span></div>`).join('')}</div><div class="pattern-box"><h4>💰 Charges Patterns</h4>${Object.entries(state.analysis.chargesPatterns).map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span>${v}</span></div>`).join('')}</div>`;
+  $('patternsGrid').innerHTML = `<div class="pattern-box"><h4>🔒 Consent Patterns</h4>${Object.entries(state.analysis.consentPatterns || {}).map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span>${v}</span></div>`).join('')}</div><div class="pattern-box"><h4>💰 Charges Patterns</h4>${Object.entries(state.analysis.chargesPatterns || {}).map(([k, v]) => `<div class="pattern-item"><span>${k}</span><span>${v}</span></div>`).join('')}</div>`;
 }
 
 function renderPrompt() {
