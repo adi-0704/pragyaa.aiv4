@@ -364,9 +364,24 @@ async function readExcel(file) {
     reader.onload = e => {
       try {
         const wb = XLSX.read(e.target.result, { type: 'array' });
-        const sheetName = wb.SheetNames.includes('Raw Data') ? 'Raw Data' : wb.SheetNames[0];
+        console.log('[Pragyaa] All sheet names:', wb.SheetNames);
+        
+        // Priority: 'Raw Data' > 'Data' > 'Sheet1' > first sheet
+        const preferred = ['Raw Data', 'Data', 'Sheet1', 'Insta', 'Audit Data', 'Audit'];
+        let sheetName = wb.SheetNames[0]; // default to first
+        for (const pref of preferred) {
+          if (wb.SheetNames.find(s => s.toLowerCase() === pref.toLowerCase())) {
+            sheetName = wb.SheetNames.find(s => s.toLowerCase() === pref.toLowerCase());
+            break;
+          }
+        }
+        
+        console.log('[Pragyaa] Using sheet:', sheetName);
+        showToast(`📑 Reading sheet: "${sheetName}"`);
+        
         const ws = wb.Sheets[sheetName];
         const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        console.log('[Pragyaa] Rows loaded:', json.length, '| Columns:', json.length > 0 ? Object.keys(json[0]) : []);
         resolve(json);
       } catch (err) { reject(err); }
     };
