@@ -43,6 +43,15 @@ const testTranscriptInput = $('testTranscriptInput');
 const oldAuditResult = $('oldAuditResult');
 const newAuditResult = $('newAuditResult');
 
+// Toolbar References
+const toggleBtns = document.querySelectorAll('.toggle-btn');
+const promptView = $('promptView');
+const optimizedPromptEl = $('optimizedPrompt');
+const changesView = $('changesView');
+const reportView = $('reportView');
+const promptVersionBadge = $('promptVersionBadge');
+const transcriptFileInput = $('transcriptFileInput');
+
 // ─── Event Listeners ──────────────────────────
 engineModeSelect.addEventListener('change', (e) => {
   state.engineMode = e.target.value;
@@ -102,6 +111,37 @@ removeFile.onclick = (e) => {
   fileInfo.style.display = 'none';
   analyzeBtn.disabled = true;
 };
+
+// ─── Transcript File Upload Handler ───────────
+if (transcriptFileInput) {
+  transcriptFileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      testTranscriptInput.value = event.target.result;
+      showToast('📄 Transcript loaded successfully');
+    };
+    reader.readAsText(file);
+  };
+}
+
+// ─── View Toggle Logic ────────────────────────
+toggleBtns.forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    toggleBtns.forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    
+    optimizedPromptEl.style.display = 'none';
+    changesView.style.display = 'none';
+    reportView.style.display = 'none';
+    
+    const view = e.target.getAttribute('data-view');
+    if (view === 'optimized') optimizedPromptEl.style.display = 'block';
+    if (view === 'changes') changesView.style.display = 'block';
+    if (view === 'report') reportView.style.display = 'block';
+  });
+});
 
 // Audio handlers removed — text transcript pasting is now used directly.
 
@@ -504,9 +544,30 @@ function renderResults() {
 }
 
 function renderPrompt() {
+  const version = `v1.${state.history.length}`;
   const badge = '<span class="ai-badge">🤖 Vertex AI</span>';
-  $('promptSection').querySelector('h2').innerHTML = 'Optimized Prompt ' + badge;
-  $('optimizedPrompt').textContent = state.optimizedPrompt;
+  $('promptSection').querySelector('h2').innerHTML = `Optimized Prompt ${badge} <span class="badge-dot" style="font-size: 0.5em; vertical-align: middle; padding: 2px 6px; border-radius: 4px; background: var(--accent-color); color: #000; margin-left: 10px;">${version}</span>`;
+  
+  // Format version in prompt header
+  const versionHeader = `# AI-GENERATED PROMPT — Vertex AI\n# Version: ${version}\n# Generated: ${new Date().toLocaleString()}\n\n`;
+  const cleanPrompt = state.optimizedPrompt.replace(/^# AI-GENERATED.*?\n# Generated:.*?\n\n/m, '');
+  $('optimizedPrompt').textContent = versionHeader + cleanPrompt;
+  
+  // Render Changes View
+  if (state.deltas && state.deltas.length > 0) {
+    changesView.innerHTML = `<h3>Modifications (Version ${version})</h3>
+      <ul style="list-style: none; padding: 0;">
+        ${state.deltas.map(d => `
+          <li style="margin-bottom: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-left: 4px solid var(--accent-color); border-radius: 4px;">
+            <div style="font-weight: 600; color: var(--accent-color); margin-bottom: 5px;">${d.param} (${d.severity})</div>
+            <div style="font-size: 0.9em; margin-bottom: 5px;"><strong>Root Cause:</strong> ${d.rootCause}</div>
+            <div style="font-size: 0.9em; color: #a5d6a7;"><strong>Fix Applied:</strong> ${d.fix}</div>
+          </li>
+        `).join('')}
+      </ul>`;
+  } else {
+    changesView.innerHTML = '<p>No specific parameter gaps identified or fixed in this iteration.</p>';
+  }
 }
 
 function renderHistory() {

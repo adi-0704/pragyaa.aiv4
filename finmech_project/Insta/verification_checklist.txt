@@ -263,7 +263,7 @@ After this, the agent should explain and optionally activate auto-debit, includi
 The agent must then guide the customer to enter the referral details using Emp ID 1 (AIR), Emp ID 2 (AIR), and SOL ID (0000).
 OTP verification and consent should be completed next.
 Finally, the agent should confirm successful application completion through a Success VOC, clearly stating the card name and card color that the customer will receive.
-•	Offer Details / Journey Pitch: Explain the pre-approved offer and application flow. (Weightage: 5)
+•	Offer Details / Journey Pitch (Login Offer Details): Explain the pre-approved offer and application flow. Mark as Met if the core concept and steps are conveyed, even if exact scripting isn't used. (Weightage: 5)
 •	Customer Basic Information: Confirm card selection, email, mobile number, address, and pincode. (Weightage: 5)
 •	Link / Card Option: Send the application link via SMS and email and explain customer-side steps. (Weightage: 10)
 •	Auto-Debit Activation: Explain auto-debit and dual card variants if applicable. (Weightage: 10)
@@ -420,13 +420,13 @@ Weightage: 3
 ________________________________________
 Soft Skills Parameters (Throughout the Call)
 •	Grammar and Sentence Construction
-Evaluate clarity, correct sentence formation, pronunciation, and meaningful communication without excessive filler words.
+Evaluate clarity, correct sentence formation, pronunciation, and meaningful communication. Be lenient on minor grammatical errors, slight regional accents, or occasional filler words as long as the agent's intent is clear. Score 0 only if language impedes understanding.
 Weightage: 5
 •	Adherence to Hold and Transfer Procedure / No Dead Air / No Unnecessary Mute Usage
 Evaluate whether hold, transfer, and mute procedures were followed correctly, with no unexplained silence or excessive hold time.
 Weightage: 3
 •	Active Listening and Avoiding Interruption / Acknowledgement
-Evaluate whether the agent listened attentively, avoided interrupting the customer, and acknowledged customer responses appropriately.
+Evaluate whether the agent listened attentively, avoided interrupting, and acknowledged responses appropriately. Be lenient on natural backchannels (e.g., 'Hmm', 'Ok') and minor overlap speech. Only penalize if the agent aggressively talks over the customer or repeatedly interrupts.
 Weightage: 5
 •	Client Engagement / Rapport Building / Energetic Tone / Avoid Casual Tone
 Evaluate the agent’s ability to build rapport, maintain an energetic and professional tone, and avoid casual or unprofessional language.
@@ -437,7 +437,7 @@ Selling Skills Parameters (Sequential & Contextual)
 Evaluate whether the agent clearly explained accurate and relevant product features and benefits specific to the credit card offered.
 Weightage: 7
 •	Need / Urgency Creation / Objection Handling
-Evaluate whether the agent created urgency, handled objections effectively, and encouraged timely completion of the process.
+Evaluate whether the agent created urgency, handled objections effectively, and encouraged timely completion. Evaluate based on context and intent; even minimal time references ("just one minute", "quick", "as soon as possible") qualify as urgency creation and must receive maximum score.
 Weightage: 10
 ________________________________________
 Closing Parameter
@@ -733,9 +733,10 @@ Fatal parameters include accurate disposition, accurate and complete information
 Fatal Errors (Critical Parameters) — Yes / No Evaluation
 Fatal parameters are evaluated only when applicable and must be marked Yes or No based on factual outcomes of the call.
 Accurate Disposition Selection
-•	Yes → The final disposition correctly matches the actual call scenario.
-•	No → The disposition selected does not match the call outcome.
+•	Yes → The final disposition and sub-disposition correctly match the actual call scenario.
+•	No → The disposition or sub-disposition selected does not match the call outcome.
 •	NA → Call type is wrong number, invalid lead, IVR, or non-connected.
+*Calibration Rule:* Carefully cross-check the Sub-Disposition. If the customer clearly rejected the offer, was busy, or hung up without interest, ensure the disposition reflects "Rejected", "Callback", or "Junk" as appropriate.
 ________________________________________
 Accurate and Complete Information
 Evaluate only if product or process information was required and discussed.
